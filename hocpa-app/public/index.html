@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HOCPA on Masked Kyber – Simulator</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  body{font-family:system-ui,sans-serif;max-width:960px;margin:2rem auto;padding:0 1rem;color:#222}
+  h1{font-size:1.4rem;margin-bottom:.2rem} p.sub{color:#666;margin-top:0}
+  .controls{display:flex;flex-wrap:wrap;gap:1rem;align-items:end;margin:1rem 0}
+  label{display:flex;flex-direction:column;font-size:.85rem;gap:.25rem}
+  input{padding:.4rem;width:110px}
+  button{padding:.6rem 1.2rem;font-size:1rem;border:0;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer}
+  button:disabled{background:#999}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  table{border-collapse:collapse;width:100%;margin-top:1rem;font-size:.9rem}
+  td,th{border-bottom:1px solid #ddd;padding:.4rem;text-align:left}
+  #status{color:#555;font-size:.9rem}
+</style>
+</head>
+<body>
+<h1>HOCPA on Masked Kyber – Adaptive Central Reduction</h1>
+<p class="sub">Simulated leakage (Hamming weight + noise + cross-term). Lower attack success = more secure.</p>
+
+<div class="controls">
+  <label>Max traces <input id="maxTraces" type="number" value="3000" min="500" max="5000" step="500"></label>
+  <label>Step <input id="step" type="number" value="500" min="250" step="250"></label>
+  <label>Trials per point <input id="trials" type="number" value="20" min="5" max="60"></label>
+  <label>Fixed λ <input id="lam" type="number" value="0.5" min="0" max="1" step="0.05"></label>
+  <button id="run">Run simulation</button>
+</div>
+<div id="status"></div>
+
+<div class="grid">
+  <canvas id="succ"></canvas>
+  <canvas id="rmax"></canvas>
+</div>
+<table id="tbl"></table>
+
+<script>
+const MODES = [
+  {id:'central',    label:'No protection (central)', color:'#E74C3C'},
+  {id:'noncentral', label:'Non-central',             color:'#3498DB'},
+  {id:'secure',     label:'Fixed secure',            color:'#2ECC71'},
+  {id:'adaptive',   label:'Bounded adaptive',        color:'#F39C12'},
+];
+let charts = {};
+
+function mkChart(el, title, ytitle, ymax){
+  if(charts[el]) charts[el].destroy();
+  charts[el] = new Chart(document.getElementById(el), {
+    type:'line',
+    data:{labels:[], datasets:MODES.map(m=>({label:m.label,borderColor:m.color,backgroundColor:m.color,data:[],tension:.2}))},
+    options:{plugins:{title:{display:true,text:title}},
+      scales:{x:{title:{display:true,text:'Traces'}},y:{title:{display:true,text:ytitle},min:0,max:ymax}}}
+  });
+  return charts[el];
+}
+
+async function point(mode, traces, trials, lam){
+  const r = await fetch(`/api/simulate?mode=${mode}&traces=${traces}&trials=${trials}&lam=${lam}`);
+  const j = await r.json();
+  if(!r.ok) throw new Error(j.error || r.status);
+  return j;
+}
+
+document.getElementById('run').onclick = async () => {
+  const btn = document.getElementById('run'), st = document.getElementById('status');
+  const maxT = +maxTraces.value, step = +document.getElementById('step').value;
+  const trials = +document.getElementById('trials').value, lamV = +lam.value;
+  const xs = []; for(let t=step; t<=maxT; t+=step) xs.push(t);
+
+  const cs = mkChart('succ','Attack success rate','Success rate',1.05);
+  const cr = mkChart('rmax','Mean peak correlation (r_max)','r_max');
+  cs.data.labels = cr.data.labels = xs;
+  const last = {};
+  btn.disabled = true;
+  try{
+    // one request per (mode, traces) – run the 4 modes in parallel for each trace count
+    for(let i=0;i<xs.length;i++){
+      st.textContent = `Running ${xs[i]} traces (${i+1}/${xs.length})…`;
+      const res = await Promise.all(MODES.map(m=>point(m.id, xs[i], trials, lamV)));
+      res.forEach((r,k)=>{
+        cs.data.datasets[k].data.push(r.success_rate);
+        cr.data.datasets[k].data.push(r.mean_rmax);
+        last[r.mode] = r;
+      });
+      cs.update(); cr.update();
+    }
+    st.textContent = 'Done.';
+    tbl.innerHTML = '<tr><th>Mode</th><th>Success @ '+maxT+'</th><th>Mean r_max</th></tr>' +
+      MODES.map(m=>`<tr><td>${m.label}</td><td>${(last[m.id].success_rate*100).toFixed(1)}%</td><td>${last[m.id].mean_rmax.toFixed(4)}</td></tr>`).join('');
+  }catch(e){ st.textContent = 'Error: '+e.message; }
+  btn.disabled = false;
+};
+</script>
+</body>
+</html>
