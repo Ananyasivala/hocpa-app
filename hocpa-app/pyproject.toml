@@ -1,3 +1,10 @@
 
+[project]
+name = "hocpa-app"
+version = "0.1.0"
+dependencies = [
+    "numpy",
+]
+
 [tool.vercel]
 entrypoint = "api.simulate:handler"
